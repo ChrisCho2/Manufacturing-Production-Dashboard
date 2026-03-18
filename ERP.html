@@ -1,0 +1,774 @@
+<!doctype html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>ERP System - Inventory, BOM & Job Control</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        .tab-btn { transition: all 0.3s ease; }
+        .tab-btn.active { border-bottom: 2px solid #4f46e5; color: #4f46e5; font-weight: bold; }
+        .scrollbar-hide::-webkit-scrollbar { display: none; }
+        .scrollbar-hide { -ms-overflow-style: none; scrollbar-width: none; }
+        .modal { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.5); align-items: center; justify-content: center; z-index: 50; }
+        .modal.active { display: flex; }
+    </style>
+</head>
+<body class="bg-gray-100 min-h-screen font-sans relative">
+
+    <div class="bg-indigo-900 text-white p-4 shadow-md">
+        <div class="max-w-7xl mx-auto flex justify-between items-center">
+            <h1 class="text-2xl font-black tracking-wider">ERP Control Tower</h1>
+            <div class="text-sm font-medium bg-indigo-800 px-3 py-1 rounded-full">Synchronized with MES</div>
+        </div>
+    </div>
+
+    <div class="max-w-7xl mx-auto p-6">
+        <div class="flex space-x-8 mb-6 border-b border-gray-300 overflow-x-auto scrollbar-hide">
+            <button onclick="switchTab('inventory')" id="tab-inventory" class="tab-btn active pb-2 text-lg text-gray-600 font-medium">1. 재고 관리 (Inventory)</button>
+            <button onclick="switchTab('bom')" id="tab-bom" class="tab-btn pb-2 text-lg text-gray-600 font-medium">2. 레시피 관리 (BOM)</button>
+            <button onclick="switchTab('job')" id="tab-job" class="tab-btn pb-2 text-lg text-gray-600 font-medium">3. 작업 지시 (Job Exec)</button>
+            <button onclick="switchTab('data')" id="tab-data" class="tab-btn pb-2 text-lg text-gray-600 font-medium">4. 데이터 센터 (Data)</button>
+        </div>
+
+        <div id="view-inventory" class="space-y-6">
+            <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                <div class="lg:col-span-2 bg-white p-6 rounded-xl shadow-md border-t-4 border-blue-600">
+                    <div class="flex justify-between items-center mb-4">
+                        <h2 class="text-xl font-bold text-gray-800">실시간 재고 현황 (MES Synchronized)</h2>
+                        <button onclick="openModal('modal-adjust-stock')" class="bg-blue-600 hover:bg-blue-700 text-white px-3 py-1.5 rounded text-sm font-bold shadow transition">실사 조정 (Cycle Count)</button>
+                    </div>
+                    <div class="overflow-y-auto max-h-[400px] border border-gray-200 rounded-lg">
+                        <table class="min-w-full text-left text-sm whitespace-nowrap">
+                            <thead class="bg-gray-50 sticky top-0 border-b">
+                                <tr>
+                                    <th class="px-4 py-3 font-bold text-gray-700">입고 날짜</th>
+                                    <th class="px-4 py-3 font-bold text-gray-700">Stock Code</th>
+                                    <th class="px-4 py-3 font-bold text-gray-700">Batch Code</th>
+                                    <th class="px-4 py-3 font-bold text-gray-700 text-right">잔량 (Kg)</th>
+                                    <th class="px-4 py-3 font-bold text-gray-700 text-right">안전 재고(ROP)</th>
+                                    <th class="px-4 py-3 font-bold text-gray-700 text-center">상태 (MES / ERP)</th>
+                                </tr>
+                            </thead>
+                            <tbody id="invTableBody" class="divide-y divide-gray-100"></tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <div class="bg-white p-6 rounded-xl shadow-md border-t-4 border-gray-600 flex flex-col">
+                    <h2 class="text-lg font-bold text-gray-800 mb-4">트랜잭션 로그 (Audit Trail)</h2>
+                    <div class="overflow-y-auto flex-grow max-h-[400px] border border-gray-200 rounded-lg">
+                        <table class="min-w-full text-left text-xs">
+                            <thead class="bg-gray-50 sticky top-0 border-b">
+                                <tr>
+                                    <th class="px-2 py-2 font-bold text-gray-700">Type</th>
+                                    <th class="px-2 py-2 font-bold text-gray-700">Code</th>
+                                    <th class="px-2 py-2 font-bold text-gray-700 text-right">Qty</th>
+                                </tr>
+                            </thead>
+                            <tbody id="trxTableBody" class="divide-y divide-gray-100"></tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div id="view-bom" class="hidden space-y-6">
+            <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                <div class="bg-white p-6 rounded-xl shadow-md border-t-4 border-orange-500">
+                    <div class="flex justify-between items-center mb-4">
+                        <h2 class="text-lg font-bold text-gray-800">BOM 목록</h2>
+                        <button onclick="createNewBOM()" class="bg-orange-500 hover:bg-orange-600 text-white px-3 py-1.5 rounded text-sm font-bold shadow transition">+ 새 레시피</button>
+                    </div>
+                    <div id="bomList" class="space-y-2 overflow-y-auto max-h-[400px]"></div>
+                </div>
+
+                <div class="lg:col-span-2 bg-white p-6 rounded-xl shadow-md border-t-4 border-yellow-500">
+                    <div class="flex justify-between items-center mb-4">
+                        <h2 class="text-xl font-bold text-gray-800" id="bomEditorTitle">레시피 에디터</h2>
+                        <div class="space-x-2">
+                            <button onclick="saveBOM(false)" class="bg-gray-600 hover:bg-gray-700 text-white px-3 py-1.5 rounded text-sm font-bold shadow transition">저장</button>
+                            <button onclick="saveBOM(true)" class="bg-yellow-600 hover:bg-yellow-700 text-white px-3 py-1.5 rounded text-sm font-bold shadow transition">Save As (버전업)</button>
+                        </div>
+                    </div>
+                    
+                    <div class="grid grid-cols-2 gap-4 mb-4">
+                        <div>
+                            <label class="block text-xs font-bold text-gray-600 uppercase">제품 코드 (Product Code)</label>
+                            <input type="text" id="bomProductCode" class="mt-1 w-full border border-gray-300 rounded p-2 focus:ring-yellow-500">
+                        </div>
+                        <div>
+                            <label class="block text-xs font-bold text-gray-600 uppercase">버전 (Version)</label>
+                            <input type="text" id="bomVersion" readonly class="mt-1 w-full bg-gray-100 border border-gray-300 rounded p-2 text-gray-500 font-bold">
+                        </div>
+                    </div>
+
+                    <div class="border border-gray-200 rounded-lg p-4 bg-gray-50">
+                        <div class="flex justify-between items-center mb-2">
+                            <label class="text-sm font-bold text-gray-800">Components (원료 구성)</label>
+                            <button onclick="addBOMComponent()" class="text-xs bg-white border border-gray-300 px-2 py-1 rounded shadow-sm hover:bg-gray-100 font-bold">+ Component 추가</button>
+                        </div>
+                        <div id="bomComponents" class="space-y-2 mb-4"></div>
+                        
+                        <div class="border-t border-gray-300 pt-3 mt-3 flex justify-between items-center">
+                            <span class="font-bold text-gray-700">Total Ratio:</span>
+                            <div class="flex items-center gap-2">
+                                <span id="bomTotalRatio" class="text-xl font-black">0%</span>
+                                <span id="bomWarning" class="hidden text-red-600 font-bold bg-red-100 px-2 py-1 rounded text-xs animate-pulse">⚠️ 총합이 100%가 아닙니다!</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div id="view-job" class="hidden space-y-6">
+            <div class="bg-white p-6 rounded-xl shadow-md border-t-4 border-purple-600">
+                <div class="flex justify-between items-center mb-6">
+                    <h2 class="text-xl font-bold text-gray-800">현장 작업 지시 (Production Jobs)</h2>
+                    <button onclick="openModal('modal-create-job')" class="bg-purple-600 hover:bg-purple-700 text-white px-4 py-2 rounded text-sm font-bold shadow transition">+ 신규 Job 생성</button>
+                </div>
+                
+                <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6" id="jobCardsContainer">
+                    </div>
+            </div>
+        </div>
+
+        <div id="view-data" class="hidden space-y-6">
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <div class="bg-white p-6 rounded-xl shadow-md border-t-4 border-teal-600 flex flex-col items-center justify-center text-center">
+                    <h2 class="text-xl font-bold text-gray-800 mb-2">백업 및 복원 (Backup & Restore)</h2>
+                    <p class="text-sm text-gray-500 mb-6">시스템의 모든 상태(재고, BOM, Job)를 JSON 파일로 백업합니다.</p>
+                    <div class="flex gap-4">
+                        <button onclick="exportJSONBackup()" class="bg-teal-600 hover:bg-teal-700 text-white px-6 py-2 rounded font-bold shadow transition">시스템 백업 (Export)</button>
+                        <input type="file" id="importJsonInput" accept=".json" class="hidden" onchange="importJSONBackup(event)">
+                        <button onclick="document.getElementById('importJsonInput').click()" class="bg-gray-600 hover:bg-gray-700 text-white px-6 py-2 rounded font-bold shadow transition">복원 (Import)</button>
+                    </div>
+                </div>
+
+                <div class="bg-white p-6 rounded-xl shadow-md border-t-4 border-emerald-600 flex flex-col items-center justify-center text-center">
+                    <h2 class="text-xl font-bold text-gray-800 mb-2">리포트 추출 (CSV Export)</h2>
+                    <p class="text-sm text-gray-500 mb-6">Power BI 및 Excel 분석을 위한 원시 데이터를 추출합니다.</p>
+                    <button onclick="exportTransactionsCSV()" class="bg-emerald-600 hover:bg-emerald-700 text-white px-6 py-2 rounded font-bold shadow transition">재고 변동 내역 CSV 다운로드</button>
+                </div>
+            </div>
+        </div>
+
+    </div>
+
+    <div id="modal-adjust-stock" class="modal">
+        <div class="bg-white p-6 rounded-xl shadow-2xl w-96">
+            <h3 class="text-lg font-bold mb-4 border-b pb-2">재고 실사 조정</h3>
+            <div class="space-y-3">
+                <div><label class="text-xs font-bold">Stock Code</label><input type="text" id="adjStockCode" class="w-full border p-2 rounded mt-1 uppercase" placeholder="예: PLA-01"></div>
+                <div><label class="text-xs font-bold">Batch Code (선택)</label><input type="text" id="adjBatchCode" class="w-full border p-2 rounded mt-1" placeholder="특정 배치명 입력 (미입력시 신규 생성)"></div>
+                <div><label class="text-xs font-bold">조정 후 실제 잔량 (Kg)</label><input type="number" id="adjQty" class="w-full border p-2 rounded mt-1"></div>
+                <div><label class="text-xs font-bold">안전 재고 ROP (Kg)</label><input type="number" id="adjRop" class="w-full border p-2 rounded mt-1" placeholder="옵션 (변경 시 입력)"></div>
+                <div><label class="text-xs font-bold text-red-600">조정 사유 (필수)</label><input type="text" id="adjReason" class="w-full border p-2 rounded mt-1 border-red-300 focus:ring-red-500" placeholder="예: 실물 재고조사 오차 반영"></div>
+            </div>
+            <div class="mt-5 flex justify-end gap-2">
+                <button onclick="closeModal('modal-adjust-stock')" class="px-4 py-2 bg-gray-300 rounded font-bold">취소</button>
+                <button onclick="executeStockAdjustment()" class="px-4 py-2 bg-blue-600 text-white rounded font-bold">반영</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="modal-create-job" class="modal">
+        <div class="bg-white p-6 rounded-xl shadow-2xl w-96">
+            <h3 class="text-lg font-bold mb-4 border-b pb-2">신규 Job 생성</h3>
+            <div class="space-y-3">
+                <div><label class="text-xs font-bold">Job Number</label><input type="text" id="newJobNo" class="w-full border p-2 rounded mt-1 uppercase" placeholder="WO-2026-001"></div>
+                <div>
+                    <label class="text-xs font-bold">적용 레시피 (BOM)</label>
+                    <select id="newJobBom" class="w-full border p-2 rounded mt-1 bg-white"></select>
+                </div>
+                <div><label class="text-xs font-bold">목표 생산량 (Planned Qty - Kg)</label><input type="number" id="newJobPlanned" class="w-full border p-2 rounded mt-1"></div>
+            </div>
+            <div class="mt-5 flex justify-end gap-2">
+                <button onclick="closeModal('modal-create-job')" class="px-4 py-2 bg-gray-300 rounded font-bold">취소</button>
+                <button onclick="executeCreateJob()" class="px-4 py-2 bg-purple-600 text-white rounded font-bold">생성</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="modal-issue" class="modal">
+        <div class="bg-white p-6 rounded-xl shadow-2xl w-96">
+            <h3 class="text-lg font-bold mb-1 border-b pb-2 text-orange-600">자재 분할 출고 (Partial Issue)</h3>
+            <p class="text-xs text-gray-500 mb-4" id="issueJobLabel"></p>
+            <input type="hidden" id="issueJobId">
+            <div class="space-y-3">
+                <div>
+                    <label class="text-xs font-bold">출고할 원료 (Stock Code)</label>
+                    <select id="issueCode" class="w-full border p-2 rounded mt-1 bg-white"></select>
+                </div>
+                <div><label class="text-xs font-bold">출고량 (Kg)</label><input type="number" id="issueQty" class="w-full border p-2 rounded mt-1"></div>
+            </div>
+            <div class="mt-5 flex justify-end gap-2">
+                <button onclick="closeModal('modal-issue')" class="px-4 py-2 bg-gray-300 rounded font-bold">취소</button>
+                <button onclick="executeIssue()" class="px-4 py-2 bg-orange-500 text-white rounded font-bold">출고 실행</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="modal-receipt" class="modal">
+        <div class="bg-white p-6 rounded-xl shadow-2xl w-96">
+            <h3 class="text-lg font-bold mb-1 border-b pb-2 text-green-600">생산 실적 등록 및 Job 마감</h3>
+            <p class="text-xs text-gray-500 mb-4" id="receiptJobLabel"></p>
+            <input type="hidden" id="receiptJobId">
+            <div class="bg-gray-50 p-3 rounded text-sm mb-4 border border-gray-200">
+                <div class="flex justify-between mb-1"><span class="font-bold">Total Issued:</span> <span id="receiptIssued" class="font-mono">0 Kg</span></div>
+                <div class="flex justify-between"><span class="font-bold">Planned:</span> <span id="receiptPlanned" class="font-mono">0 Kg</span></div>
+            </div>
+            <div>
+                <label class="text-xs font-bold text-green-700">실제 최종 생산량 (Actual Qty - Kg)</label>
+                <input type="number" id="receiptActual" class="w-full border-2 border-green-400 p-2 rounded mt-1 focus:outline-none focus:ring-2 focus:ring-green-500">
+            </div>
+            <div class="mt-5 flex justify-end gap-2">
+                <button onclick="closeModal('modal-receipt')" class="px-4 py-2 bg-gray-300 rounded font-bold">취소</button>
+                <button onclick="executeReceipt()" class="px-4 py-2 bg-green-600 text-white rounded font-bold">수율 계산 및 마감</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // --- State Management ---
+        let erpState = {
+            inventory: {}, // { "RM-100": { rop: 100 } } -> 실제 재고는 mesReference 사용
+            transactions: [], // ERP측 트랜잭션 기록
+            boms: [], 
+            jobs: [] 
+        };
+        let mesReference = null; // MES 데이터 동기화용 참조 변수
+        let currentEditingBomId = null;
+
+        function init() {
+            // 1. 공통 스토리지에서 통합 데이터 불러오기
+            const saved = localStorage.getItem('ctk_unified_state');
+            if (saved) {
+                const unifiedState = JSON.parse(saved);
+                if (unifiedState.erp) erpState = unifiedState.erp;
+                mesReference = unifiedState.mes || null; 
+            } else {
+                // 구버전 백업 데이터 호환
+                const oldSaved = localStorage.getItem('erpAppState');
+                if (oldSaved) erpState = JSON.parse(oldSaved);
+            }
+            
+            // 더미 데이터 주입 (최초 실행 시)
+            if (erpState.boms.length === 0) {
+                erpState.inventory = { "PLA-01": { rop: 500 }, "ADD-X": { rop: 100 } };
+                erpState.boms.push({ id: 'bom_1', code: 'PROD-A', version: 'v1.0', components: [{code: 'PLA-01', ratio: 95}, {code: 'ADD-X', ratio: 5}] });
+                saveState(); 
+                return;
+            }
+
+            renderInventory();
+            renderBOMList();
+            renderJobs();
+            updateBomDropdowns();
+        }
+
+        function saveState() {
+            // 2. 공통 스토리지에 데이터 병합 저장 (MES 데이터는 보존)
+            let unifiedState = { erp: erpState, mes: {} };
+            const saved = localStorage.getItem("ctk_unified_state");
+            if (saved) {
+                unifiedState.mes = JSON.parse(saved).mes || {};
+            }
+            // 업데이트된 mesReference가 있다면 덮어씌움 (실사조정, 출고 등에 사용)
+            if (mesReference) {
+                unifiedState.mes = mesReference;
+            }
+            localStorage.setItem("ctk_unified_state", JSON.stringify(unifiedState));
+            
+            renderInventory();
+            renderBOMList();
+            renderJobs();
+            updateBomDropdowns();
+        }
+
+        // 3. 실시간 동기화 리스너 (MES 쪽 탭에서 변경이 일어났을 때 즉시 감지)
+        window.addEventListener('storage', function(e) {
+            if (e.key === 'ctk_unified_state') {
+                init();
+            }
+        });
+
+        // --- Tab Navigation ---
+        function switchTab(tabId) {
+            document.querySelectorAll('[id^="view-"]').forEach(el => el.classList.add('hidden'));
+            document.querySelectorAll('.tab-btn').forEach(el => el.classList.remove('active'));
+            
+            document.getElementById(`view-${tabId}`).classList.remove('hidden');
+            document.getElementById(`tab-${tabId}`).classList.add('active');
+        }
+
+        // --- Modals ---
+        function openModal(id) { document.getElementById(id).classList.add('active'); }
+        function closeModal(id) { document.getElementById(id).classList.remove('active'); }
+
+        // --- Helper ---
+        function logTransaction(type, code, change, reason, jobNo = "-") {
+            erpState.transactions.unshift({
+                id: Date.now().toString(36),
+                ts: new Date().toLocaleString(),
+                type, code, change, reason, jobNo
+            });
+            if(erpState.transactions.length > 500) erpState.transactions.pop();
+        }
+
+        function getTotalStock(code) {
+            if (!mesReference || !mesReference.inventory) return 0;
+            return mesReference.inventory.filter(i => i.stockCode === code).reduce((sum, i) => sum + i.currentQty, 0);
+        }
+
+        // ==========================================
+        // 1. Inventory Logic (MES Synchronized)
+        // ==========================================
+        function renderInventory() {
+            const invBody = document.getElementById("invTableBody");
+            let html = "";
+            
+            const mesInv = (mesReference && mesReference.inventory) ? mesReference.inventory : [];
+            
+            // Stock Code별 총합 미리 계산 (ROP 경고용)
+            let stockTotals = {};
+            mesInv.forEach(item => {
+                if (!stockTotals[item.stockCode]) stockTotals[item.stockCode] = 0;
+                stockTotals[item.stockCode] += item.currentQty;
+            });
+
+            if (mesInv.length === 0) {
+                invBody.innerHTML = `<tr><td colspan="6" class="text-center py-6 text-gray-500 font-medium">MES(index.html)에서 생성된 재고 데이터가 없습니다.</td></tr>`;
+            } else {
+                mesInv.forEach(item => {
+                    // ERP에 저장된 안전재고(ROP) 값 불러오기
+                    const rop = (erpState.inventory[item.stockCode] && erpState.inventory[item.stockCode].rop) || 0;
+                    const totalQty = stockTotals[item.stockCode];
+                    const isLow = totalQty < rop;
+                    
+                    // MES 상태 뱃지
+                    let mesStatusHtml = item.status === 'Available' ? '<span class="text-green-600 font-bold text-xs">Available</span>' 
+                                      : item.status === 'Partial' ? '<span class="text-amber-600 font-bold text-xs">Partial</span>' 
+                                      : '<span class="text-gray-400 font-bold text-xs">Depleted</span>';
+
+                    // ERP 경고 뱃지 (총량 기반)
+                    let erpStatusHtml = isLow 
+                        ? '<span class="bg-red-100 text-red-800 px-1.5 py-0.5 rounded text-[10px] font-bold ml-1 shadow-sm">🔴 ROP 부족</span>' 
+                        : '<span class="bg-green-100 text-green-800 px-1.5 py-0.5 rounded text-[10px] font-bold ml-1 shadow-sm">🟢 정상</span>';
+
+                    html += `
+                        <tr class="hover:bg-blue-50 transition border-b border-gray-100">
+                            <td class="px-4 py-3 text-gray-600 text-xs">${item.inboundDate || '-'}</td>
+                            <td class="px-4 py-3 font-bold text-gray-800">${item.stockCode}</td>
+                            <td class="px-4 py-3 font-mono text-blue-700 font-semibold tracking-tight">${item.batchCode}</td>
+                            <td class="px-4 py-3 text-right font-mono font-black ${item.currentQty === 0 ? 'text-gray-300' : 'text-gray-800'}">${item.currentQty}</td>
+                            <td class="px-4 py-3 text-right font-mono text-gray-500">${rop}</td>
+                            <td class="px-4 py-3 text-center">${mesStatusHtml} ${erpStatusHtml}</td>
+                        </tr>
+                    `;
+                });
+                invBody.innerHTML = html;
+            }
+
+            const trxBody = document.getElementById("trxTableBody");
+            trxBody.innerHTML = erpState.transactions.slice(0, 50).map(t => `
+                <tr class="border-b border-gray-50 hover:bg-gray-100">
+                    <td class="px-2 py-2 text-gray-500 font-bold ${t.type==='IN'||t.type==='ADJ'?'text-blue-600':t.type==='OUT'?'text-orange-500':'text-purple-600'}">${t.type}</td>
+                    <td class="px-2 py-2 font-mono text-gray-800">${t.code}</td>
+                    <td class="px-2 py-2 text-right font-mono ${t.change > 0 ? 'text-green-600' : 'text-red-600'}">${t.change > 0 ? '+' : ''}${t.change}</td>
+                </tr>
+            `).join("");
+        }
+
+        function executeStockAdjustment() {
+            const code = document.getElementById("adjStockCode").value.trim().toUpperCase();
+            const batchCode = document.getElementById("adjBatchCode").value.trim();
+            const qty = Number(document.getElementById("adjQty").value);
+            const rop = Number(document.getElementById("adjRop").value);
+            const reason = document.getElementById("adjReason").value.trim();
+
+            if (!code || isNaN(qty) || !reason) return alert("Stock Code, 수량, 사유는 필수입니다.");
+
+            if (!mesReference) mesReference = {};
+            if (!mesReference.inventory) mesReference.inventory = [];
+
+            let diff = 0;
+            // 1. 특정 배치가 지정된 경우 해당 배치를 수정
+            if (batchCode) {
+                let targetBatch = mesReference.inventory.find(i => i.stockCode === code && i.batchCode === batchCode);
+                if (targetBatch) {
+                    diff = qty - targetBatch.currentQty;
+                    targetBatch.currentQty = qty;
+                    targetBatch.status = qty === 0 ? "Depleted" : (qty < targetBatch.initialQty ? "Partial" : "Available");
+                } else {
+                    alert("해당 Batch Code를 찾을 수 없어 신규 조정 배치로 생성합니다.");
+                    mesReference.inventory.unshift({
+                        id: 'inv_' + Date.now(), inboundDate: new Date().toISOString().slice(0, 10),
+                        stockCode: code, batchCode: batchCode, initialQty: qty, currentQty: qty, status: "Available"
+                    });
+                    diff = qty;
+                }
+            } 
+            // 2. 배치를 지정하지 않은 경우 범용(ADJ) 배치 신규 생성
+            else {
+                const newBatch = `ADJ-${Date.now().toString(36).toUpperCase().substring(0, 6)}`;
+                mesReference.inventory.unshift({
+                    id: 'inv_' + Date.now(), inboundDate: new Date().toISOString().slice(0, 10),
+                    stockCode: code, batchCode: newBatch, initialQty: qty, currentQty: qty, status: "Available"
+                });
+                diff = qty;
+            }
+
+            // ERP의 ROP 상태 갱신
+            if (!erpState.inventory[code]) erpState.inventory[code] = { rop: 0 };
+            if (rop > 0) erpState.inventory[code].rop = rop;
+
+            logTransaction("ADJ", code, diff, reason);
+            saveState(); // 이 과정에서 mesReference의 변경사항도 ctk_unified_state 에 함께 저장됩니다.
+            closeModal('modal-adjust-stock');
+            
+            document.getElementById("adjStockCode").value = "";
+            document.getElementById("adjBatchCode").value = "";
+            document.getElementById("adjQty").value = "";
+            document.getElementById("adjReason").value = "";
+            document.getElementById("adjRop").value = "";
+        }
+
+        // ==========================================
+        // 2. BOM Logic
+        // ==========================================
+        function renderBOMList() {
+            const list = document.getElementById("bomList");
+            list.innerHTML = erpState.boms.map(bom => `
+                <div class="flex justify-between items-center bg-gray-50 p-3 rounded border border-gray-200 hover:border-orange-400 cursor-pointer transition" onclick="loadBOM('${bom.id}')">
+                    <div>
+                        <div class="font-bold text-gray-800">${bom.code}</div>
+                        <div class="text-xs text-gray-500 font-mono">${bom.version} | ${bom.components.length} comps</div>
+                    </div>
+                </div>
+            `).join("");
+        }
+
+        function createNewBOM() {
+            currentEditingBomId = null;
+            document.getElementById("bomProductCode").value = "";
+            document.getElementById("bomVersion").value = "v1.0";
+            document.getElementById("bomComponents").innerHTML = "";
+            addBOMComponent();
+            validateBOM();
+        }
+
+        function loadBOM(id) {
+            const bom = erpState.boms.find(b => b.id === id);
+            if (!bom) return;
+            currentEditingBomId = bom.id;
+            document.getElementById("bomProductCode").value = bom.code;
+            document.getElementById("bomVersion").value = bom.version;
+            
+            const container = document.getElementById("bomComponents");
+            container.innerHTML = "";
+            bom.components.forEach(comp => addBOMComponent(comp.code, comp.ratio));
+            validateBOM();
+        }
+
+        function addBOMComponent(code = "", ratio = "") {
+            const div = document.createElement('div');
+            div.className = "flex gap-2 items-center bom-row";
+            div.innerHTML = `
+                <input type="text" class="bom-code w-1/2 border p-2 rounded uppercase text-sm" placeholder="Raw Material Code" value="${code}">
+                <input type="number" class="bom-ratio w-1/3 border p-2 rounded text-sm text-right" placeholder="Ratio (%)" value="${ratio}" oninput="validateBOM()">
+                <button onclick="this.parentElement.remove(); validateBOM();" class="w-1/6 bg-red-100 text-red-600 rounded font-bold hover:bg-red-200">X</button>
+            `;
+            document.getElementById("bomComponents").appendChild(div);
+        }
+
+        function validateBOM() {
+            const ratios = Array.from(document.querySelectorAll('.bom-ratio')).map(inp => Number(inp.value) || 0);
+            const total = ratios.reduce((a, b) => a + b, 0);
+            
+            document.getElementById("bomTotalRatio").innerText = `${total.toFixed(2)}%`;
+            
+            const warning = document.getElementById("bomWarning");
+            if (Math.abs(total - 100) > 0.01) {
+                warning.classList.remove("hidden");
+                document.getElementById("bomTotalRatio").classList.add("text-red-600");
+            } else {
+                warning.classList.add("hidden");
+                document.getElementById("bomTotalRatio").classList.remove("text-red-600");
+            }
+        }
+
+        function saveBOM(isSaveAs) {
+            const code = document.getElementById("bomProductCode").value.trim().toUpperCase();
+            if (!code) return alert("제품 코드를 입력하세요.");
+
+            const rows = Array.from(document.querySelectorAll('.bom-row'));
+            let components = [];
+            let totalRatio = 0;
+
+            rows.forEach(row => {
+                const c = row.querySelector('.bom-code').value.trim().toUpperCase();
+                const r = Number(row.querySelector('.bom-ratio').value);
+                if (c && r > 0) { components.push({code: c, ratio: r}); totalRatio += r; }
+            });
+
+            if (Math.abs(totalRatio - 100) > 0.01) return alert("Component 비율의 합이 100%가 아닙니다. 저장이 차단됩니다.");
+
+            let version = document.getElementById("bomVersion").value;
+            
+            if (isSaveAs || !currentEditingBomId) {
+                const existingSameCode = erpState.boms.filter(b => b.code === code);
+                version = `v${existingSameCode.length + 1}.0`;
+                
+                const newBOM = { id: 'bom_' + Date.now(), code, version, components };
+                erpState.boms.unshift(newBOM);
+                currentEditingBomId = newBOM.id;
+            } else {
+                const bom = erpState.boms.find(b => b.id === currentEditingBomId);
+                bom.code = code;
+                bom.components = components;
+            }
+
+            document.getElementById("bomVersion").value = version;
+            saveState();
+            alert("BOM이 저장되었습니다.");
+        }
+
+        // ==========================================
+        // 3. Job Execution Logic
+        // ==========================================
+        function updateBomDropdowns() {
+            const select = document.getElementById("newJobBom");
+            select.innerHTML = erpState.boms.map(b => `<option value="${b.id}">${b.code} (${b.version})</option>`).join("");
+        }
+
+        function renderJobs() {
+            const container = document.getElementById("jobCardsContainer");
+            container.innerHTML = erpState.jobs.map(job => {
+                const bom = erpState.boms.find(b => b.id === job.bomId);
+                const bomName = bom ? `${bom.code} (${bom.version})` : 'Unknown BOM';
+                
+                // ======= [자동 연동 마법: MES 기록을 읽어와 Actual Qty 자동 계산] =======
+                if (mesReference && mesReference.history) {
+                    const mesRecords = mesReference.history.filter(h => h.jobNo === job.jobNo);
+                    const actualFromMes = mesRecords.reduce((sum, h) => sum + (Number(h.dailyProdInput) || 0), 0);
+                    job.actual = actualFromMes; // MES에서 입력한 생산량이 실시간으로 반영됨
+                }
+                // ====================================================================
+
+                let issuedTotal = 0;
+                let issuedHtml = "";
+                for (const [code, qty] of Object.entries(job.issued)) {
+                    issuedTotal += qty;
+                    issuedHtml += `<div class="text-xs text-gray-500 font-mono flex justify-between"><span>${code}</span><span>${qty} Kg</span></div>`;
+                }
+
+                let statusBadge = "";
+                let actionButtons = "";
+
+                if (job.status === 'Open' || job.status === 'In Progress') {
+                    statusBadge = `<span class="bg-blue-100 text-blue-800 px-2 py-0.5 rounded text-xs font-bold">${job.status}</span>`;
+                    actionButtons = `
+                        <button onclick="prepareIssue('${job.id}')" class="flex-1 bg-orange-50 text-orange-700 border border-orange-200 hover:bg-orange-100 py-1.5 rounded text-xs font-bold transition">원료 출고</button>
+                        <button onclick="prepareReceipt('${job.id}')" class="flex-1 bg-green-600 text-white hover:bg-green-700 py-1.5 rounded text-xs font-bold transition">실적/마감</button>
+                    `;
+                } else {
+                    const yieldVal = issuedTotal > 0 ? ((job.actual / issuedTotal) * 100).toFixed(1) : 0;
+                    statusBadge = `<span class="bg-gray-200 text-gray-600 px-2 py-0.5 rounded text-xs font-bold">Completed</span>`;
+                    actionButtons = `<div class="w-full text-center bg-gray-50 border border-gray-200 py-1.5 rounded text-sm font-black text-gray-800">Yield: <span class="${yieldVal < 90 ? 'text-red-600' : 'text-green-600'}">${yieldVal}%</span></div>`;
+                }
+
+                return `
+                    <div class="border border-gray-200 rounded-lg p-4 bg-white shadow-sm flex flex-col justify-between hover:shadow transition">
+                        <div>
+                            <div class="flex justify-between items-start mb-2">
+                                <h4 class="font-black text-purple-900 text-lg">${job.jobNo}</h4>
+                                ${statusBadge}
+                            </div>
+                            <div class="text-sm font-bold text-gray-700 mb-3 border-b pb-2 flex items-center gap-1">📋 ${bomName}</div>
+                            
+                            <div class="grid grid-cols-2 gap-2 text-sm mb-3">
+                                <div class="bg-gray-50 p-2 rounded text-center"><div class="text-xs text-gray-400">Planned</div><div class="font-bold">${job.planned} Kg</div></div>
+                                <div class="bg-green-50 p-2 rounded text-center"><div class="text-xs text-green-600">Actual</div><div class="font-bold text-green-700">${job.actual || '-'} Kg</div></div>
+                            </div>
+                            
+                            <div class="mb-4">
+                                <div class="text-xs font-bold text-gray-600 mb-1 border-b">Issued Materials (${issuedTotal} Kg)</div>
+                                ${issuedHtml || '<div class="text-xs text-gray-400 italic">아직 출고된 자재가 없습니다.</div>'}
+                            </div>
+                        </div>
+                        <div class="flex gap-2 mt-auto pt-2 border-t border-gray-100">
+                            ${actionButtons}
+                        </div>
+                    </div>
+                `;
+            }).join("");
+        }
+
+        function executeCreateJob() {
+            const jobNo = document.getElementById("newJobNo").value.trim().toUpperCase();
+            const bomId = document.getElementById("newJobBom").value;
+            const planned = Number(document.getElementById("newJobPlanned").value);
+
+            if (!jobNo || !bomId || planned <= 0) return alert("입력값을 확인하세요.");
+            if (erpState.jobs.find(j => j.jobNo === jobNo)) return alert("이미 존재하는 Job 번호입니다.");
+
+            erpState.jobs.unshift({
+                id: 'job_' + Date.now(), jobNo, bomId, status: 'Open', planned, actual: 0, issued: {}
+            });
+
+            saveState();
+            closeModal('modal-create-job');
+            document.getElementById("newJobNo").value = "";
+            document.getElementById("newJobPlanned").value = "";
+        }
+
+        function prepareIssue(jobId) {
+            const job = erpState.jobs.find(j => j.id === jobId);
+            document.getElementById("issueJobId").value = jobId;
+            document.getElementById("issueJobLabel").innerText = `대상: ${job.jobNo}`;
+            
+            const bom = erpState.boms.find(b => b.id === job.bomId);
+            const select = document.getElementById("issueCode");
+            
+            select.innerHTML = bom.components.map(c => {
+                const avail = getTotalStock(c.code);
+                return `<option value="${c.code}">${c.code} (가용 재고: ${avail} Kg)</option>`;
+            }).join("");
+
+            openModal('modal-issue');
+        }
+
+        function executeIssue() {
+            const jobId = document.getElementById("issueJobId").value;
+            const code = document.getElementById("issueCode").value;
+            const qty = Number(document.getElementById("issueQty").value);
+
+            if (qty <= 0) return alert("올바른 수량을 입력하세요.");
+            
+            const totalAvail = getTotalStock(code);
+            if (qty > totalAvail) {
+                return alert(`[출고 거부] ${code}의 총 재고가 부족합니다. (현재 가용: ${totalAvail}Kg)`);
+            }
+
+            // MES 재고에서 선입선출(FIFO) 기반 자동 차감
+            let remainingToDeduct = qty;
+            const availableBatches = mesReference.inventory
+                .filter(i => i.stockCode === code && i.currentQty > 0)
+                .sort((a, b) => new Date(a.inboundDate) - new Date(b.inboundDate));
+
+            for (let batch of availableBatches) {
+                if (remainingToDeduct <= 0) break;
+                let deduct = Math.min(batch.currentQty, remainingToDeduct);
+                batch.currentQty -= deduct;
+                remainingToDeduct -= deduct;
+                batch.status = batch.currentQty === 0 ? "Depleted" : "Partial";
+                
+                // MES측 트랜잭션 기록에도 자동으로 남김 (추적성 완벽 유지)
+                if(!mesReference.transactions) mesReference.transactions = [];
+                mesReference.transactions.unshift({
+                    id: 'trx_' + Date.now() + Math.random().toString(36).substr(2,5),
+                    timestamp: new Date().toLocaleString(),
+                    type: "OUT", stockCode: code, batchCode: batch.batchCode,
+                    jobNo: erpState.jobs.find(j => j.id === jobId).jobNo,
+                    amount: deduct, remarks: "ERP Auto Issue (FIFO)"
+                });
+            }
+
+            // Job 내역에 출고 처리 추가
+            const job = erpState.jobs.find(j => j.id === jobId);
+            if (!job.issued[code]) job.issued[code] = 0;
+            job.issued[code] += qty;
+            job.status = 'In Progress';
+
+            // ERP 트랜잭션에도 남김
+            logTransaction("OUT", code, -qty, "Job Material Issue", job.jobNo);
+            
+            saveState(); // ERP 상태와 변경된 MES 상태를 통합 스토리지에 동시 저장
+            closeModal('modal-issue');
+            document.getElementById("issueQty").value = "";
+        }
+
+        function prepareReceipt(jobId) {
+            const job = erpState.jobs.find(j => j.id === jobId);
+            document.getElementById("receiptJobId").value = jobId;
+            document.getElementById("receiptJobLabel").innerText = `대상: ${job.jobNo}`;
+            
+            let issuedTotal = 0;
+            for (const qty of Object.values(job.issued)) issuedTotal += qty;
+
+            document.getElementById("receiptIssued").innerText = `${issuedTotal} Kg`;
+            document.getElementById("receiptPlanned").innerText = `${job.planned} Kg`;
+            
+            // Default suggestion: If actual is already calculated from MES, use it. Else use planned.
+            document.getElementById("receiptActual").value = job.actual > 0 ? job.actual : job.planned; 
+
+            openModal('modal-receipt');
+        }
+
+        function executeReceipt() {
+            const jobId = document.getElementById("receiptJobId").value;
+            const actual = Number(document.getElementById("receiptActual").value);
+
+            if (actual <= 0) return alert("실제 생산량을 입력하세요.");
+
+            const job = erpState.jobs.find(j => j.id === jobId);
+            job.actual = actual;
+            job.status = 'Completed';
+
+            saveState();
+            closeModal('modal-receipt');
+        }
+
+        // ==========================================
+        // 4. Data Protection & Reporting
+        // ==========================================
+        function exportJSONBackup() {
+            // ERP 데이터와 MES 데이터 전체를 포함한 통합 백업
+            const unifiedState = { erp: erpState, mes: mesReference };
+            const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(unifiedState));
+            const downloadAnchorNode = document.createElement('a');
+            downloadAnchorNode.setAttribute("href", dataStr);
+            downloadAnchorNode.setAttribute("download", `Unified_System_Backup_${new Date().toISOString().slice(0,10)}.json`);
+            document.body.appendChild(downloadAnchorNode);
+            downloadAnchorNode.click();
+            downloadAnchorNode.remove();
+        }
+
+        function importJSONBackup(event) {
+            const file = event.target.files[0];
+            if (!file) return;
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                try {
+                    const imported = JSON.parse(e.target.result);
+                    if (imported.erp || imported.mes) {
+                        localStorage.setItem("ctk_unified_state", JSON.stringify(imported));
+                        alert("통합 백업 데이터가 성공적으로 복원되었습니다. 시스템을 새로고침합니다.");
+                        location.reload();
+                    } else { throw new Error(); }
+                } catch(err) {
+                    alert("유효하지 않은 백업 파일입니다.");
+                }
+            };
+            reader.readAsText(file);
+            event.target.value = "";
+        }
+
+        function exportTransactionsCSV() {
+            let csvContent = "data:text/csv;charset=utf-8,\uFEFF";
+            csvContent += "Timestamp,Type,StockCode,ChangeQty,Reason,JobNo\n";
+            erpState.transactions.forEach(t => {
+                csvContent += `"${t.ts}","${t.type}","${t.code}",${t.change},"${t.reason}","${t.jobNo}"\n`;
+            });
+            const link = document.createElement("a");
+            link.setAttribute("href", encodeURI(csvContent));
+            link.setAttribute("download", `ERP_Transactions_${new Date().toISOString().slice(0, 10)}.csv`);
+            document.body.appendChild(link); link.click(); link.remove();
+        }
+
+        window.onload = init;
+    </script>
+</body>
+</html>
